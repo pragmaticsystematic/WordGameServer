@@ -11,8 +11,9 @@ namespace WordGameServer
         {
             // StartServer();
             // StartTCPListener();
-            var gl = new GameLogic.GameLogic();
-            
+            var gameServer = new GameServer.GameServer(13000, "127.0.0.1");
+            gameServer.StartServer();
+
             return 0;
         }
 
