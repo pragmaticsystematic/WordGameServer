@@ -5,25 +5,25 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using WordGameServer.Common;
+using WordGameServer.Common.NetworkCommandCodes;
 
 namespace WordGameServer.GameServer
 {
+    /// <summary>
+    /// Class that houses the game server.
+    /// </summary>
     public class GameServer
     {
         private readonly int                 _port;
         private readonly IPAddress           _ipAddress;
         private          TcpListener         _tcpListener;
-        private          GameLogic.GameLogic _gameLogic;
-        private          Regex               _clientRequestRegex;
+        private readonly GameLogic.GameLogic _gameLogic;
 
         public GameServer(int port, string ipAddress)
         {
             _port      = port;
             _gameLogic = new GameLogic.GameLogic();
             _ipAddress = IPAddress.Parse(ipAddress);
-            _clientRequestRegex =
-                new Regex(
-                    "Request ID: (?<requestId>\\d+) Request Command: (?<requestCommand>\\d+) Player Identifier: (?<playerId>\\w+) Payload: (?<payload>\\w+)");
         }
 
 
@@ -41,9 +41,9 @@ namespace WordGameServer.GameServer
                 Console.WriteLine(
                     $"THREAD ID: {Thread.CurrentThread.ManagedThreadId} - Server is ready to receive a connection At: {_ipAddress}:{_port}");
 
-                // Perform a blocking call to accept requests.
-                // You could also use server.AcceptSocket() here.
-                TcpClient client = _tcpListener.AcceptTcpClient();
+                // Establishing connection with the client and passing that connection to a thread pool.
+                // This solution isn't scalable but it should be fine for a small number of concurrent clients.
+                var client = _tcpListener.AcceptTcpClient();
                 Console.WriteLine($"THREAD ID: {Thread.CurrentThread.ManagedThreadId} - Connected!");
                 ThreadPool.QueueUserWorkItem(state => HandleClientConnection(client));
             }
@@ -55,8 +55,7 @@ namespace WordGameServer.GameServer
             Console.WriteLine(
                 $"Starting Communication with new client in thread: {Thread.CurrentThread.ManagedThreadId}");
             // Buffer for reading data
-            Byte[] bytes = new Byte[256];
-            String data  = null;
+            var bytes = new Byte[256];
 
             // Get a stream object for reading and writing
             NetworkStream stream = client.GetStream();
@@ -67,89 +66,107 @@ namespace WordGameServer.GameServer
             while ((i = stream.Read(bytes, 0, bytes.Length)) != 0)
             {
                 // Translate data bytes to a ASCII string.
-                data = System.Text.Encoding.ASCII.GetString(bytes, 0, i);
+                var data = System.Text.Encoding.ASCII.GetString(bytes, 0, i);
                 Console.WriteLine($"THREAD ID: {Thread.CurrentThread.ManagedThreadId} Received: {data}");
 
-                var response = HandleClientRequest(data);
-                // // Process the data sent by the client.
-                // data =
-                //     $"Hello from server! Got it! The user guess is: {data.Replace("Hello from Unity! Player guess is ", "")}";
+                var requestStruct = new CommunicationStruct();
 
-                byte[] msg = Encoding.ASCII.GetBytes(response);
+
+                //todo: implement a failure path where parsing from string fails.
+                //parse request struct from received string.
+                requestStruct.FromString(data);
+                var response = HandleClientRequest(requestStruct);
+
+
+                //serialize reply struct to string
+                var replyString = response.ToString();
+
+                byte[] msg = Encoding.ASCII.GetBytes(replyString);
 
                 // Send back a response.
                 stream.Write(msg, 0, msg.Length);
                 Console.WriteLine("Sent: {0}", response);
+
+                if (requestStruct.RequestCommand == NetworkClientRequestCommandCodes.REQUEST_DISCONNECT)
+                {
+                    Console.WriteLine(
+                        $"THREAD ID: {Thread.CurrentThread.ManagedThreadId} Client is requesting a disconnect... Disconnecting");
+                    break;
+                }
             }
 
             // Shutdown and end connection
+            Console.WriteLine($"THREAD ID: {Thread.CurrentThread.ManagedThreadId} - Closing connection...");
+            stream.Close();
             client.Close();
         }
 
-        private string HandleClientRequest(string clientRequestString)
+        private CommunicationStruct HandleClientRequest(CommunicationStruct requestStruct)
         {
             var threadId = $"THREAD ID: {Thread.CurrentThread.ManagedThreadId}";
 
-            var requestStruct = new CommunicationStruct();
-            var replyStruct   = new CommunicationStruct();
-            
-            requestStruct.FromString(clientRequestString);
-            var reply = "";
+
+            //we initialize the reply struct with a failed status. So unless we override it with relevant data and
+            //success status, we send back a failed reply.
+            var replyStruct = new CommunicationStruct()
+            {
+                RequestId        = requestStruct.RequestId,
+                RequestCommand   = NetworkServerReplyCommandCodes.REQUEST_FAILURE,
+                Payload          = "DONTCARE",
+                PlayerIdentifier = requestStruct.PlayerIdentifier
+            };
 
 
+            //todo: try put the repetitive code from each case in a function.
             switch (requestStruct.RequestCommand)
             {
                 //command to choose a new word to guess
-                case 0:
+                case NetworkClientRequestCommandCodes.GUESS_NEW_WORD:
                     var newWordToGuess = _gameLogic.PickWordToGuess(requestStruct.PlayerIdentifier);
                     Console.WriteLine(
                         $"{threadId} - Chose a new word for player: {requestStruct.PlayerIdentifier}. Word is: {newWordToGuess}");
-                    replyStruct.RequestId        = requestStruct.RequestId;
-                    replyStruct.RequestCommand   = 0; //0 means success
-                    replyStruct.Payload          = newWordToGuess;
-                    replyStruct.PlayerIdentifier = requestStruct.PlayerIdentifier;
 
+                    replyStruct.RequestCommand = NetworkServerReplyCommandCodes.REQUEST_SUCCESS;
+                    replyStruct.Payload        = newWordToGuess;
 
-                    reply = replyStruct.ToString();
 
                     break;
                 //command to evaluate guess
-                case 1:
+                case NetworkClientRequestCommandCodes.EVALUATE_GUESS:
                     Console.WriteLine(
                         $"{threadId} - Evaluation Guess: {requestStruct.Payload}. For Player: {requestStruct.PlayerIdentifier}");
                     var evalResults =
                         _gameLogic.EvaluateGuess(requestStruct.PlayerIdentifier, requestStruct.Payload);
 
-                    replyStruct.RequestId        = requestStruct.RequestId;
-                    replyStruct.RequestCommand   = 0; //0 means success
-                    replyStruct.Payload          = evalResults;
-                    replyStruct.PlayerIdentifier = requestStruct.PlayerIdentifier;
+                    replyStruct.RequestCommand = NetworkServerReplyCommandCodes.REQUEST_SUCCESS;
+                    replyStruct.Payload        = evalResults;
 
-                    reply = replyStruct.ToString();
 
                     break;
                 //command to check if the word exist in the dictionary
-                case 2:
+                case NetworkClientRequestCommandCodes.CHECK_WORD_EXISTS:
                     Console.WriteLine(
                         $"{threadId} - Checking if word {requestStruct.Payload} exist in the dictionary for player {requestStruct.PlayerIdentifier}");
                     var result = _gameLogic.CheckIsViableWord(requestStruct.Payload);
 
-                    replyStruct.RequestId        = requestStruct.RequestId;
-                    replyStruct.RequestCommand   = 0; //0 means success
-                    replyStruct.Payload          = result.ToString();
-                    replyStruct.PlayerIdentifier = requestStruct.PlayerIdentifier;
-
-                    reply = replyStruct.ToString();
+                    replyStruct.RequestCommand = NetworkServerReplyCommandCodes.REQUEST_SUCCESS;
+                    replyStruct.Payload        = result.ToString();
                     break;
 
+                case NetworkClientRequestCommandCodes.REQUEST_DISCONNECT:
+                    Console.WriteLine(
+                        $"{threadId} - Client for player: '{requestStruct.PlayerIdentifier}' Requests a disconnect...");
+                    replyStruct.RequestCommand = NetworkServerReplyCommandCodes.REQUEST_SUCCESS;
+                    break;
 
                 default:
                     Console.WriteLine(
-                        $"{threadId} - Command {requestStruct.RequestCommand} is an unknown command! ");
+                        $"{threadId} - Command {requestStruct.RequestCommand} is an unknown command!  ");
                     break;
             }
 
-            return reply;
+
+            return replyStruct;
         }
     }
 }

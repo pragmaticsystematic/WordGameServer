@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using WordGameServer.Common.NetworkCommandCodes;
 
 namespace WordGameServer.GameLogic
 {
@@ -109,18 +110,18 @@ namespace WordGameServer.GameLogic
                     if (wordToCheckAgainst[i] == playerGuess[i])
                     {
                         Console.WriteLine($"Letter {playerGuess[i]} Exist in the word and it's in the correct place!");
-                        guessEvaluation += "2";
+                        guessEvaluation += LetterEvaluationCodes.LETTER_EXISTS_IN_WORD_AND_IN_CORRECT_PLACE;
                     }
                     else
                     {
                         Console.WriteLine($"Letter {playerGuess[i]} Exist in the BUT it's NOT in the correct place!");
-                        guessEvaluation += "1";
+                        guessEvaluation += LetterEvaluationCodes.LETTER_EXISTS_IN_WORD_BUT_NOT_IN_ORDER;
                     }
                 }
                 else //character doesn't exist in the word at all
                 {
                     Console.WriteLine($"Letter {playerGuess[i]} NOT exist in the word at all!");
-                    guessEvaluation += "0";
+                    guessEvaluation += LetterEvaluationCodes.LETTER_DOESNT_EXIST_IN_WORD;
                 }
             }
 
@@ -133,7 +134,7 @@ namespace WordGameServer.GameLogic
         /// </summary>
         /// <param name="pathToLoad">Path to the CSV file containing the words</param>
         /// <returns>List of strings with the loaded words</returns>
-        private List<String> LoadCSVFileToStringListFromPath(string pathToLoad)
+        private List<string> LoadCSVFileToStringListFromPath(string pathToLoad)
         {
             return System.IO.File.ReadAllText(pathToLoad).Split(',')
                          .Select(x => x.ToLower()).ToList();
